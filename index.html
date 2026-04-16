@@ -1,0 +1,447 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PiedraChat</title>
+  <style>
+    body { margin:0; font-family:Segoe UI,Helvetica,Arial,sans-serif; background:#111; color:#eee; }
+    .app { max-width:940px; margin:0 auto; padding:20px; }
+    h1 { margin-top:0; color:#f3b600; letter-spacing:0.05em; }
+    .panel { background:#16181d; border:1px solid #2a2f38; border-radius:14px; padding:20px; box-shadow:0 16px 40px rgba(0,0,0,.4); }
+    label { display:block; margin:16px 0 8px; font-size:0.95rem; color:#c7d3e1; }
+    input, button, textarea, select { width:100%; border:none; border-radius:10px; padding:12px 14px; font-size:1rem; color:#eee; background:#21252d; }
+    button { cursor:pointer; background:#f3b600; color:#111; font-weight:700; transition:transform .15s ease, background .15s ease; }
+    button:hover { transform:translateY(-1px); background:#ffca00; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; }
+    .row > * { flex:1; min-width:180px; }
+    .hidden { display:none !important; }
+    .status { margin-top:10px; color:#c7d3e1; font-size:.95rem; }
+    .message-list { max-height:320px; overflow:auto; padding:8px; margin:16px 0; background:#12151c; border:1px solid #2a2f38; border-radius:12px; }
+    .message { margin-bottom:12px; line-height:1.5; }
+    .message .meta { font-size:.82rem; color:#99a2b3; display:flex; align-items:center; justify-content:space-between; gap:0.5rem; }
+    .message .meta-time { color:#6a7d99; font-size:.78rem; }
+    .message.self { text-align:right; }
+    .message.self .bubble { background:linear-gradient(135deg,#f3b600,#e8b200); color:#111; }
+    .bubble { display:inline-block; padding:10px 14px; border-radius:18px; background:#1e2531; max-width:80%; word-break:break-word; }
+    .request-item { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; padding:12px; border:1px solid #2a2f38; border-radius:12px; margin-bottom:10px; }
+    .request-item div { min-width:220px; }
+    .request-actions button { width:auto; margin-left:8px; }
+    .footer-note { margin-top:18px; font-size:.92rem; color:#8e9ab1; }
+    .monospace { font-family:Consolas,monospace; background:#0f141b; padding:10px 12px; border-radius:10px; color:#d8d8d8; overflow-wrap:anywhere; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="panel" id="loginPanel">
+      <h1>PiedraChat</h1>
+      <p>Only the owner can open the main computer. Users send a password request to the owner and are approved before they can chat.</p>
+
+      <label>Role</label>
+      <div class="row">
+        <label><input type="radio" name="role" value="admin" checked /> Main computer (admin)</label>
+        <label><input type="radio" name="role" value="user" /> User</label>
+      </div>
+
+      <label for="usernameInput">Username</label>
+      <input id="usernameInput" placeholder="Your name" autocomplete="off" />
+
+      <label for="passwordInput">Password</label>
+      <input id="passwordInput" type="password" placeholder="Your password" autocomplete="new-password" />
+
+      <button id="connectButton">Start</button>
+      <div class="status" id="loginStatus">Admin opens the main computer. Users send a password request to admin.</div>
+    </div>
+
+    <div class="panel hidden" id="adminPanel">
+      <h1>Main computer</h1>
+      <p>This computer handles approvals and stores approved usernames/passwords.</p>
+      <div class="status" id="adminStatus"></div>
+      <div class="footer-note">Public join address: <span class="monospace" id="hostIdDisplay"></span></div>
+
+      <h2>Pending join requests</h2>
+      <div id="requestList"></div>
+
+      <h2>Approved users</h2>
+      <div id="approvedList"></div>
+
+      <h2>Chat room</h2>
+      <div class="message-list" id="adminMessageList"></div>
+      <div class="row">
+        <input id="adminMessageInput" placeholder="Type a message" autocomplete="off" />
+        <button id="adminSendButton">Send</button>
+      </div>
+      <div class="footer-note">Chat is shared with approved users.</div>
+    </div>
+
+    <div class="panel hidden" id="chatPanel">
+      <h1>PiedraChat user</h1>
+      <div class="status" id="userStatus">Request access from the main computer.</div>
+      <div class="message-list" id="userMessageList"></div>
+      <div class="row">
+        <input id="userMessageInput" placeholder="Type a message" autocomplete="off" />
+        <button id="userSendButton">Send</button>
+      </div>
+      <div class="footer-note">Only approved users can chat. Login again only with your password.</div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+  <script>
+    const loginPanel = document.getElementById('loginPanel');
+    const adminPanel = document.getElementById('adminPanel');
+    const chatPanel = document.getElementById('chatPanel');
+    const adminStatus = document.getElementById('adminStatus');
+    const hostIdDisplay = document.getElementById('hostIdDisplay');
+    const requestList = document.getElementById('requestList');
+    const approvedList = document.getElementById('approvedList');
+    const adminMessageList = document.getElementById('adminMessageList');
+    const adminMessageInput = document.getElementById('adminMessageInput');
+    const adminSendButton = document.getElementById('adminSendButton');
+    const userStatus = document.getElementById('userStatus');
+    const userMessageList = document.getElementById('userMessageList');
+    const userMessageInput = document.getElementById('userMessageInput');
+    const userSendButton = document.getElementById('userSendButton');
+    const usernameInput = document.getElementById('usernameInput');
+    const passwordInput = document.getElementById('passwordInput');
+    const connectButton = document.getElementById('connectButton');
+
+    const MAIN_HOST_ID = 'piedrachat-main-admin';
+    const ACCOUNTS_STORAGE_KEY = 'piedraChatAdminAccounts';
+    const OWNER_PASSWORD = 'enizkosler34!';
+
+    let peer = null;
+    let role = 'admin';
+    let username = '';
+    let password = '';
+    let currentConn = null;
+    let adminConnections = {};
+    let pendingRequests = {};
+    let accounts = {};
+
+    document.querySelectorAll('input[name="role"]').forEach(el => {
+      el.addEventListener('change', () => {
+        role = document.querySelector('input[name="role"]:checked').value;
+        connectButton.textContent = role === 'admin' ? 'Start' : 'Request access';
+        loginStatus.textContent = role === 'admin'
+          ? 'Owner opens the main computer using the owner password. Users send a password request to admin.'
+          : 'User requests access from the main computer.';
+      });
+    });
+
+    connectButton.addEventListener('click', handleStart);
+    adminSendButton.addEventListener('click', sendAdminMessage);
+    adminMessageInput.addEventListener('keydown', event => { if (event.key === 'Enter') sendAdminMessage(); });
+    userSendButton.addEventListener('click', sendUserMessage);
+    userMessageInput.addEventListener('keydown', event => { if (event.key === 'Enter') sendUserMessage(); });
+
+    loadAccounts();
+    renderApprovedUsers();
+
+    function handleStart() {
+      username = usernameInput.value.trim();
+      password = passwordInput.value.trim();
+      if (!username || !password) {
+        alert('Enter a username and password.');
+        return;
+      }
+      if (role === 'admin') {
+        if (password !== OWNER_PASSWORD) {
+          alert('Only the owner can start admin mode. Enter the correct owner password.');
+          return;
+        }
+        startAdmin();
+      } else {
+        startUser();
+      }
+    }
+
+    function startAdmin() {
+      loginPanel.classList.add('hidden');
+      adminPanel.classList.remove('hidden');
+      hostIdDisplay.textContent = MAIN_HOST_ID;
+      adminStatus.textContent = 'Starting the main computer...';
+
+      peer = new Peer(MAIN_HOST_ID, { host: '0.peerjs.com', port: 443, path: '/', secure: true });
+
+      peer.on('open', id => {
+        adminStatus.textContent = `Main computer online as ${id}. Waiting for requests.`;
+      });
+
+      peer.on('connection', conn => {
+        conn.on('open', () => {
+          conn.on('data', data => handleAdminData(conn, data));
+          conn.on('close', () => handleAdminDisconnect(conn.peer));
+          conn.on('error', err => console.error('Admin connection error', err));
+        });
+      });
+
+      peer.on('error', err => {
+        adminStatus.textContent = `Peer error: ${err.type || err}`;
+        console.error(err);
+      });
+    }
+
+    function startUser() {
+      loginPanel.classList.add('hidden');
+      chatPanel.classList.remove('hidden');
+      userStatus.textContent = 'Connecting to the main computer...';
+
+      const userId = `user-${username}-${Math.floor(Math.random() * 100000)}`;
+      peer = new Peer(userId, { host: '0.peerjs.com', port: 443, path: '/', secure: true });
+
+      peer.on('open', () => {
+        const conn = peer.connect(MAIN_HOST_ID);
+        currentConn = conn;
+
+        conn.on('open', () => {
+          conn.send({ type: 'join-request', username, password });
+          userStatus.textContent = 'Password sent. Waiting for admin approval...';
+        });
+
+        conn.on('data', data => handleUserData(data));
+        conn.on('close', () => userStatus.textContent = 'Connection closed by the main computer.');
+        conn.on('error', err => {
+          userStatus.textContent = 'Unable to connect to main computer.';
+          console.error('User connection error', err);
+        });
+      });
+
+      peer.on('error', err => {
+        userStatus.textContent = `Connection error: ${err.type || err}`;
+        console.error(err);
+      });
+    }
+
+    function handleAdminData(conn, data) {
+      if (!data || typeof data !== 'object') return;
+
+      if (data.type === 'join-request') {
+        const req = { conn, username: data.username, password: data.password };
+        if (!req.username || !req.password) {
+          conn.send({ type: 'join-response', accepted: false, reason: 'Username or password missing.' });
+          conn.close();
+          return;
+        }
+        if (accounts[req.username]) {
+          if (accounts[req.username] === req.password) {
+            conn.send({ type: 'join-response', accepted: true, username: req.username });
+            adminConnections[conn.peer] = { conn, username: req.username };
+            conn.on('data', data => handleAdminData(conn, data));
+            appendSystemMessage(`Returning user approved: ${req.username}`);
+          } else {
+            conn.send({ type: 'join-response', accepted: false, reason: 'Wrong password for existing account.' });
+            conn.close();
+          }
+        } else {
+          createPendingRequest(conn, req.username, req.password);
+        }
+      } else if (data.type === 'chat') {
+        const sender = adminConnections[conn.peer]?.username;
+        if (sender) {
+          appendAdminMessage(data.text, sender);
+          broadcastToUsers({ type: 'chat', text: data.text, username: sender }, conn.peer);
+        }
+      }
+    }
+
+    function createPendingRequest(conn, requestedUsername, requestedPassword) {
+      const requestId = conn.peer;
+      pendingRequests[requestId] = { conn, username: requestedUsername, password: requestedPassword };
+      renderRequest(requestId);
+      adminStatus.textContent = `New request: ${requestedUsername}. Review and approve.`;
+    }
+
+    function renderRequest(requestId) {
+      const request = pendingRequests[requestId];
+      if (!request) return;
+      const item = document.createElement('div');
+      item.className = 'request-item';
+      item.id = `request-${requestId}`;
+      item.innerHTML = `
+        <div>
+          <strong>${escapeHtml(request.username)}</strong><br />
+          Password: <span class="monospace">${escapeHtml(request.password)}</span>
+        </div>
+        <div class="request-actions">
+          <button type="button" data-action="accept">Accept</button>
+          <button type="button" data-action="reject">Reject</button>
+        </div>
+      `;
+      item.querySelector('[data-action="accept"]').addEventListener('click', () => approvePendingRequest(request.conn, request.username, true, true));
+      item.querySelector('[data-action="reject"]').addEventListener('click', () => approvePendingRequest(request.conn, request.username, false, false));
+      requestList.appendChild(item);
+    }
+
+    function approvePendingRequest(conn, username, accepted, storePassword) {
+      const requestId = conn.peer;
+      const pending = pendingRequests[requestId];
+      if (!pending) return;
+      if (accepted) {
+        if (storePassword) {
+          accounts[username] = pending.password;
+          saveAccounts();
+          renderApprovedUsers();
+        }
+        adminConnections[conn.peer] = { conn, username };
+        conn.send({ type: 'join-response', accepted: true, username });
+        conn.on('data', data => handleAdminData(conn, data));
+        appendSystemMessage(`${username} has been approved and joined.`);
+      } else {
+        conn.send({ type: 'join-response', accepted: false, reason: 'Access rejected by admin.' });
+        conn.close();
+        appendSystemMessage(`${username} was rejected.`);
+      }
+      const item = document.getElementById(`request-${requestId}`);
+      if (item) item.remove();
+      delete pendingRequests[requestId];
+    }
+
+    function renderApprovedUsers() {
+      if (!approvedList) return;
+      approvedList.innerHTML = '';
+      const names = Object.keys(accounts).sort();
+      if (names.length === 0) {
+        approvedList.textContent = 'No approved users yet.';
+        return;
+      }
+      names.forEach(name => {
+        const item = document.createElement('div');
+        item.className = 'request-item';
+        item.innerHTML = `
+          <div><strong>${escapeHtml(name)}</strong></div>
+          <div class="request-actions">
+            <button type="button" data-action="disapprove">Disapprove</button>
+          </div>
+        `;
+        item.querySelector('[data-action="disapprove"]').addEventListener('click', () => disapproveUser(name));
+        approvedList.appendChild(item);
+      });
+    }
+
+    function disapproveUser(username) {
+      if (!accounts[username]) return;
+      delete accounts[username];
+      saveAccounts();
+      renderApprovedUsers();
+      appendSystemMessage(`${username} has been disapproved.`);
+      removeConnectedUser(username);
+    }
+
+    function removeConnectedUser(username) {
+      Object.entries(adminConnections).forEach(([peerId, record]) => {
+        if (record.username === username) {
+          try {
+            record.conn.send({ type: 'chat', text: 'You have been disapproved by admin.', username: 'System' });
+          } catch (_) {}
+          try {
+            record.conn.close();
+          } catch (_) {}
+          delete adminConnections[peerId];
+        }
+      });
+    }
+
+    function handleAdminDisconnect(peerId) {
+      delete adminConnections[peerId];
+      appendSystemMessage(`User ${peerId} disconnected.`);
+    }
+
+    function broadcastToUsers(data, exceptPeer) {
+      Object.values(adminConnections).forEach(({ conn }) => {
+        if (conn.open && conn.peer !== exceptPeer) conn.send(data);
+      });
+    }
+
+    function sendAdminMessage() {
+      const text = adminMessageInput.value.trim();
+      if (!text) return;
+      adminMessageInput.value = '';
+      appendAdminMessage(text, 'Admin');
+      broadcastToUsers({ type: 'chat', text, username: 'Admin' });
+    }
+
+    function handleUserData(data) {
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'join-response') {
+        if (data.accepted) {
+          userStatus.textContent = 'Approved. You are now in the chat room.';
+          appendUserSystemMessage('You are approved and connected.');
+        } else {
+          userStatus.textContent = data.reason || 'Request denied by admin.';
+        }
+      } else if (data.type === 'chat') {
+        appendUserMessage(data.text, data.username, false);
+      } else if (data.type === 'system') {
+        appendUserSystemMessage(data.text);
+      }
+    }
+
+    function sendUserMessage() {
+      const text = userMessageInput.value.trim();
+      if (!text || !currentConn || currentConn.open === false) return;
+      currentConn.send({ type: 'chat', text, username });
+      appendUserMessage(text, username, true);
+      userMessageInput.value = '';
+    }
+
+    function appendAdminMessage(text, sender) {
+      const item = document.createElement('div');
+      item.className = 'message';
+      item.innerHTML = `<div class="meta"><span>${escapeHtml(sender)}</span><span class="meta-time">${formatTimestamp(new Date())}</span></div><div class="bubble">${escapeHtml(text)}</div>`;
+      adminMessageList.appendChild(item);
+      adminMessageList.scrollTop = adminMessageList.scrollHeight;
+    }
+
+    function appendSystemMessage(text) {
+      const item = document.createElement('div');
+      item.className = 'message';
+      item.innerHTML = `<div class="meta"><span>System</span><span class="meta-time">${formatTimestamp(new Date())}</span></div><div class="bubble">${escapeHtml(text)}</div>`;
+      adminMessageList.appendChild(item);
+      adminMessageList.scrollTop = adminMessageList.scrollHeight;
+    }
+
+    function appendUserMessage(text, sender, self) {
+      const item = document.createElement('div');
+      item.className = 'message' + (self ? ' self' : '');
+      item.innerHTML = `<div class="meta"><span>${escapeHtml(sender)}</span><span class="meta-time">${formatTimestamp(new Date())}</span></div><div class="bubble">${escapeHtml(text)}</div>`;
+      userMessageList.appendChild(item);
+      userMessageList.scrollTop = userMessageList.scrollHeight;
+    }
+
+    function appendUserSystemMessage(text) {
+      const item = document.createElement('div');
+      item.className = 'message';
+      item.innerHTML = `<div class="meta">System<span class="meta-time">${formatTimestamp(new Date())}</span></div><div class="bubble">${escapeHtml(text)}</div>`;
+      userMessageList.appendChild(item);
+      userMessageList.scrollTop = userMessageList.scrollHeight;
+    }
+
+    function saveAccounts() {
+      try {
+        localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(accounts));
+      } catch (err) {
+        console.warn('Unable to save accounts', err);
+      }
+    }
+
+    function loadAccounts() {
+      const stored = localStorage.getItem(ACCOUNTS_STORAGE_KEY);
+      if (!stored) return;
+      try {
+        accounts = JSON.parse(stored) || {};
+      } catch (err) {
+        console.warn('Unable to load stored accounts', err);
+      }
+    }
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[tag]);
+    }
+
+    function formatTimestamp(date) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+  </script>
+</body>
+</html>
