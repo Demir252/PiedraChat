@@ -115,6 +115,8 @@
     let username = '';
     let password = '';
     let currentConn = null;
+    let userRetryTimer = null;
+    let pendingJoinRequest = null;
     let adminConnections = {};
     let pendingRequests = {};
     let accounts = {};
@@ -186,31 +188,69 @@
       loginPanel.classList.add('hidden');
       chatPanel.classList.remove('hidden');
       userStatus.textContent = 'Connecting to the main computer...';
+      pendingJoinRequest = { username, password };
 
       const userId = `user-${username}-${Math.floor(Math.random() * 100000)}`;
       peer = new Peer(userId, { host: '0.peerjs.com', port: 443, path: '/', secure: true });
 
       peer.on('open', () => {
-        const conn = peer.connect(MAIN_HOST_ID);
-        currentConn = conn;
-
-        conn.on('open', () => {
-          conn.send({ type: 'join-request', username, password });
-          userStatus.textContent = 'Password sent. Waiting for admin approval...';
-        });
-
-        conn.on('data', data => handleUserData(data));
-        conn.on('close', () => userStatus.textContent = 'Connection closed by the main computer.');
-        conn.on('error', err => {
-          userStatus.textContent = 'Unable to connect to main computer.';
-          console.error('User connection error', err);
-        });
+        userStatus.textContent = 'Attempting to contact the main computer...';
+        attemptUserConnect();
       });
 
       peer.on('error', err => {
-        userStatus.textContent = `Connection error: ${err.type || err}`;
+        userStatus.textContent = `Connection error: ${err.type || err}. Retrying...`;
         console.error(err);
+        scheduleUserReconnect();
       });
+    }
+
+    function attemptUserConnect() {
+      if (!peer || peer.destroyed) return;
+      if (currentConn && currentConn.open) return;
+
+      userStatus.textContent = 'Requesting permission from the main computer...';
+      const conn = peer.connect(MAIN_HOST_ID);
+      currentConn = conn;
+
+      conn.on('open', () => {
+        clearUserReconnect();
+        if (pendingJoinRequest) {
+          conn.send({ type: 'join-request', username: pendingJoinRequest.username, password: pendingJoinRequest.password });
+        }
+        userStatus.textContent = 'Password sent. Waiting for admin approval...';
+      });
+
+      conn.on('data', data => handleUserData(data));
+      conn.on('close', () => {
+        currentConn = null;
+        userStatus.textContent = 'Admin is offline. Waiting for them to come online...';
+        scheduleUserReconnect();
+      });
+      conn.on('error', err => {
+        currentConn = null;
+        userStatus.textContent = 'Unable to reach main computer. Retrying...';
+        console.error('User connection error', err);
+        scheduleUserReconnect();
+      });
+    }
+
+    function scheduleUserReconnect() {
+      if (userRetryTimer) return;
+      userRetryTimer = setTimeout(() => {
+        userRetryTimer = null;
+        if (peer && !peer.destroyed) {
+          userStatus.textContent = 'Retrying connection to the main computer...';
+          attemptUserConnect();
+        }
+      }, 5000);
+    }
+
+    function clearUserReconnect() {
+      if (userRetryTimer) {
+        clearTimeout(userRetryTimer);
+        userRetryTimer = null;
+      }
     }
 
     function handleAdminData(conn, data) {
