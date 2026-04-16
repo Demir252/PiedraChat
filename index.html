@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+﻿DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -116,6 +116,7 @@
     let password = '';
     let currentConn = null;
     let userRetryTimer = null;
+    let userConnectTimer = null;
     let pendingJoinRequest = null;
     let adminConnections = {};
     let pendingRequests = {};
@@ -215,6 +216,7 @@
 
       conn.on('open', () => {
         clearUserReconnect();
+        clearUserConnectTimer();
         if (pendingJoinRequest) {
           conn.send({ type: 'join-request', username: pendingJoinRequest.username, password: pendingJoinRequest.password });
         }
@@ -223,16 +225,27 @@
 
       conn.on('data', data => handleUserData(data));
       conn.on('close', () => {
+        clearUserConnectTimer();
         currentConn = null;
         userStatus.textContent = 'Admin is offline. Waiting for them to come online...';
         scheduleUserReconnect();
       });
       conn.on('error', err => {
+        clearUserConnectTimer();
         currentConn = null;
         userStatus.textContent = 'Unable to reach main computer. Retrying...';
         console.error('User connection error', err);
         scheduleUserReconnect();
       });
+
+      userConnectTimer = setTimeout(() => {
+        if (conn && !conn.open) {
+          try { conn.close(); } catch (_) {}
+          if (currentConn === conn) currentConn = null;
+          userStatus.textContent = 'No response from main computer. Retrying...';
+          scheduleUserReconnect();
+        }
+      }, 6000);
     }
 
     function scheduleUserReconnect() {
@@ -250,6 +263,13 @@
       if (userRetryTimer) {
         clearTimeout(userRetryTimer);
         userRetryTimer = null;
+      }
+    }
+
+    function clearUserConnectTimer() {
+      if (userConnectTimer) {
+        clearTimeout(userConnectTimer);
+        userConnectTimer = null;
       }
     }
 
@@ -478,6 +498,13 @@
     function escapeHtml(text) {
       return String(text).replace(/[&<>"']/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[tag]);
     }
+
+    function formatTimestamp(date) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+  </script>
+</body>
+</html>
 
     function formatTimestamp(date) {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
